@@ -39,8 +39,8 @@ class Reward:
 
 
     def set_hit_times(self, t_hits, drum_indices):
-        total =self.long_promp.n_discretizations*.004
-        total = total //4
+        total =self.long_promp.n_discretizations*.001
+      
         assert(len(drum_indices) == len(t_hits)) # for each hit_time we specify the index of the drum
         self.Phi_per_segment = []
         i = 0
