@@ -91,11 +91,11 @@ class ProMP:
 
     @staticmethod
     def get_trajectories_for_phi(weights, phi_matrix):
-        num_rbfs = tf.shape(phi_matrix)[1]
+        num_rbfs = tf.shape(phi_matrix)[-1]
         sampled_trajectory = tf.TensorArray(size=4, dtype=tf.float32)
         t=0
         for i in range(4):
-            sampled_trajectory = sampled_trajectory.write(i, (phi_matrix @ tf.expand_dims(weights[t:t+num_rbfs], 1))[:,0])
+            sampled_trajectory = sampled_trajectory.write(i,(phi_matrix @ tf.expand_dims(weights[t:t+num_rbfs],1)))
             t += num_rbfs
         return sampled_trajectory.concat()
   

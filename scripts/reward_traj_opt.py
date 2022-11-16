@@ -8,8 +8,9 @@ from time import time
 import matplotlib.pyplot as plt
 from numpy import linalg as la
 import tensorflow_probability as tfp
+import scipy.optimize as sopt
 
-
+#from optimparallel import minimize_parallel
 
 
 
@@ -39,51 +40,64 @@ class Reward:
 
     def set_hit_times(self, t_hits, drum_indices):
         total =self.long_promp.n_discretizations*.004
+        total = total //4
         assert(len(drum_indices) == len(t_hits)) # for each hit_time we specify the index of the drum
         self.Phi_per_segment = []
+        i = 0
         for t_hit, drum_index in zip(t_hits, drum_indices):
-            phi_segments_this_drum = []
+            phi_segments_this_drum = []#np.zeros((4,len(self.strike_promp_means[i][0])//4,self.long_promp.num_rbfs),dtype=np.float32)
+            t = 0
             for strike_promp in self.strike_promps[drum_index]:
                 strike_duration = 1#strike_promp.n_discretizations * 0.001 #
-                time_steps_this_drum = tf.linspace(t_hit - (self.promp_duration/2) * strike_duration, t_hit + (self.promp_duration/2) * strike_duration, 
-                int(strike_promp.n_discretizations/4))
-                #
-                time_steps_this_drum =np.concatenate([time_steps_this_drum,time_steps_this_drum+total/4,time_steps_this_drum+(total)/2,time_steps_this_drum+(3*total)/4])
-
+                time_steps_this_drum = np.linspace(t_hit - (self.promp_duration/2) * strike_duration, t_hit + (self.promp_duration/2) * strike_duration, 
+                len(self.strike_promp_means[i][t])//4).astype(np.float32)
                 phi_segments_this_drum.append(self.long_promp.get_Phi_for_timesteps(time_steps_this_drum,total))
+  
+               # time_steps_this_drum =np.concatenate([time_steps_this_drum,time_steps_this_drum+total/4,time_steps_this_drum+(total)/2,time_steps_this_drum+(3*total)/4])
+
+               # phi_segments_this_drum.append(phi_segments_this_drum)
+                t+=1
             self.Phi_per_segment.append(phi_segments_this_drum)
+            i+=1
 
 
 
     tf.function(input_signature=(tf.TensorSpec(shape=[None], dtype=tf.float32),))
-    def get_cost(self, trajectory,discount=1):
-        velocities ,acceleration,jerk = self.get_deriv_penalties(trajectory)
+    def get_cost(self, weights):
+        #trajectory = ProMP.get_trajectories_for_phi(weights=weights,phi_matrix=self.long_promp.Phi_matrix)
+        # velocities ,acceleration,jerk = self.get_deriv_penalties(trajectory)
 
-        velocities = tf.abs(velocities)
-        acceleration = tf.abs(acceleration)
-        jerk = tf.abs(jerk)
+        # velocities = tf.abs(velocities)
+        # acceleration = tf.abs(acceleration)
+        # jerk = tf.abs(jerk)
+        
 
         strike_rewards = tf.TensorArray(dtype=tf.float32,size=len(self.strike_promps))
         #traj =self.get_intervals(trajectory,[.75,1.85])
         for i in range(len(self.Phi_per_segment)):
             #traj_ = traj[i]
             #strike_rewards = strike_rewards.write(i,self.get_strike_reward(i, traj_))
-            strike_rewards = strike_rewards.write(i,self.get_strike_reward(i, trajectory=trajectory))
+            strike_rewards = strike_rewards.write(i,self.get_strike_reward(i, weights=weights))
             
 
-        return - tf.reduce_sum(strike_rewards.stack()) + (tf.reduce_sum(velocities)+tf.reduce_sum(acceleration)+tf.reduce_sum(jerk))/discount
+        return - tf.reduce_sum(strike_rewards.stack()) #+ (tf.reduce_sum(velocities)+tf.reduce_sum(acceleration)+tf.reduce_sum(jerk))/discount
 
-    def get_strike_reward(self, interval_idx, trajectory):
-        log_pi = tf.TensorArray(size = len(self.Phi_per_segment[interval_idx]), dtype=tf.float32)
-        for i in range(len(self.Phi_per_segment[interval_idx])): # we call this two times each loop runs 3 times
+    def get_strike_reward(self, interval_idx, weights,discount=1):
+        
+        log_pi = tf.TensorArray(size = len(self.strike_promp_means[interval_idx]), dtype=tf.float32)
+        for i in range(len(self.strike_promp_means[interval_idx])): # we call this two times each loop runs 3 times
+            traj_segment = ProMP.get_trajectories_for_phi(weights,self.Phi_per_segment[interval_idx][i])
+            traj_segment = tf.squeeze(traj_segment)
+            velocities ,acceleration,jerk = self.get_deriv_penalties(traj_segment)
 
-            
+     
 
             # 
             # traj = self.component_log_density(interval_idx,i,tf.squeeze(self.strike_promp_means[0][0]))
-            traj_segment = tf.experimental.numpy.take(trajectory,self.times_steps[interval_idx])
+            #traj_segment = tf.experimental.numpy.take(trajectory,self.times_steps[interval_idx])
 
-            log_pi = log_pi.write(i, self.component_log_density(interval_idx,i,traj_segment))
+            log_pi = log_pi.write(i, self.component_log_density(interval_idx,i,traj_segment)
+            -(velocities+acceleration+jerk)/discount)
         log_pi = log_pi.stack()
         max_val = tf.reduce_max(log_pi)
         softmax =(max_val + tf.math.log(tf.reduce_sum(tf.exp(log_pi - max_val))))
@@ -99,7 +113,7 @@ class Reward:
             a = self.my_gradient_tf(vs)
             acceleration=acceleration.write(i,a)
             jerk=jerk.write(i,self.my_gradient_tf(a))
-        return velocities.concat() , acceleration.concat(), jerk.concat()
+        return tf.reduce_sum(tf.abs(velocities.concat())) , tf.reduce_sum(tf.abs(acceleration.concat())), tf.reduce_sum(tf.abs(jerk.concat()))
             
 
             
@@ -220,6 +234,21 @@ if __name__ == "__main__":
             else:
                 return True
 
+        #
+    def grad(x):
+        with tf.GradientTape() as tape:
+            cost = reward_computer.get_cost(x)
+            print(cost)
+            grads = tape.gradient(cost,x)
+            
+        return cost ,grads
+
+    def func(x):
+        return [vv.numpy().astype(np.float64)  for vv in grad(tf.Variable(x, dtype=tf.float32))]
+
+
+        #
+
 
 
 
@@ -245,26 +274,29 @@ if __name__ == "__main__":
     strike_promp_means, strike_promp_chols,strike_covs = load_means_and_choleskys(strike_promps, ws)
     
     reward_computer = Reward(strike_promps, strike_promp_means, strike_promp_chols, long_promp,0.6)
+    errs = np.array([0.031440544128418055,0.04373688697814933])
+    t_hits=np.array([.55,1.45])
+    t_hits += errs
     #reward_computer.set_hit_times(t_hits=[.3], drum_indices=[0])#
-    reward_computer.set_hit_times(t_hits=[.55,1.45], drum_indices=[0, 1])
-    reward_computer.get_time_indexes(t_hits=[.55,1.45])
+    reward_computer.set_hit_times(t_hits=t_hits, drum_indices=[0, 1])
+    reward_computer.get_time_indexes(t_hits=t_hits)
     # reward_computer.get_time_indexes(t_hits=[.3])
 
     #x= tf.Variable(initial_value= np.random.rand(180),dtype=tf.float32)
     #x= tf.Variable(initial_value= np.random.rand(2400),dtype=tf.float32)
-
     pre_trained = False
     # lr_schedle = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=.1,decay_steps=5000,decay_rate=0.5)
     # new_lr_schedle = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries=[2000,5000,8500,11000,25000],values=[0.1,0.05,0.01,0.005,0.002,0.001])
     if pre_trained:
-        x = tf.Variable(initial_value=np.load("/home/atashak/taxi/robot/long_trajectory_direct3.npy"))
+        x = tf.Variable(initial_value=np.load("/home/atashak/taxi/long_trajectory_direct_debug_scipy2.npy"))
         lr_iter = np.load("/home/atashak/taxi/robot/long_trajectory_direct3.npz")
         lr = float(lr_iter["lr"])
-        i = int(lr_iter["iters"])
+        i = 1#int(lr_iter["iters"])
         opt = tf.keras.optimizers.Adam(learning_rate=MyLRSchedule(lr))
     else:
-        x= tf.Variable(initial_value= np.random.rand(7200),dtype=tf.float32)
-        opt = tf.keras.optimizers.Adam(learning_rate=MyLRSchedule(0.1))
+        x= tf.Variable(initial_value= np.random.rand(180),dtype=tf.float32)
+        opt = tf.keras.optimizers.Ftrl(learning_rate=MyLRSchedule(0.1))
+        
         i=1
 
     
@@ -272,32 +304,70 @@ if __name__ == "__main__":
     lr_border = 5
     # plt_traj = tf.constant(np.load("/home/atashak/taxi/robot/long_trajectory_direct3.npy"))
     # reward_computer.plot_trajectory(plt_traj)
+    st = time()
+    resdd= sopt.minimize(fun=func, x0=x,
+                                      jac=True, method='L-BFGS-B')
+    print(f"finished in{st-time()} seconds" )
+    # resdd= minimize_parallel(fun=func, x0=x,
+    #                                  parallel={'loginfo': True})
 
-    while True:
+    # using CG took 248 seconds and the cost was: -25328.133
+    # using trust-constr took 672 seconds and the cost was: -25405.844
+    # using L-BFGS-B took 470 seconds and the cost was: -25449.916
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # while True:
         
-        with tf.GradientTape() as tape:
-            cost = reward_computer.get_cost(x)
-            grads = tape.gradient(cost,x)
-            opt.apply_gradients(zip([grads],[x]))
-        if i%40 ==0 :
-            #reward_computer.plot_trajectory(x)
-            print(cost)
-            #reward_computer.plot_trajectory([.3],[0],x)#reward_computer.plot_trajectory([.75,1.85],[0, 1],x)
-       #     print("plotted")
-            if len(hist) < lr_border:
-                hist.append(cost)
-            else:
-                opt.learning_rate.__call__(i,hist)
+    #     with tf.GradientTape() as tape:
+    #         cost = reward_computer.get_cost(x)
+            
+    #         grads = tape.gradient(cost,x)
+    #         for _ in range(10):
+    #             opt.apply_gradients(zip([grads],[x]))
+    #     if i%40 ==0 :
+    #         #reward_computer.plot_trajectory(x)
+    #         print(cost)
+    #         #reward_computer.plot_trajectory([.3],[0],x)#reward_computer.plot_trajectory([.75,1.85],[0, 1],x)
+    #    #     print("plotted")
+    #         if len(hist) < lr_border:
+    #             hist.append(cost)
+    #         else:
+    #             opt.learning_rate.__call__(i,hist)
                 
-                hist = [] # -1*np.max(-1*np.array(hist)) for more aggressive decline in rl
+    #             hist = [] # -1*np.max(-1*np.array(hist)) for more aggressive decline in rl
         
-        if i%5000 ==0:
-            print("saving!!!")
-            np.save("long_trajectory_direct_debug.npy",x.numpy())
-            np.savez("long_trajectory_direct_debug.npz",lr=np.array(opt.learning_rate.initial_learning_rate),iters = np.array(i))
-        i+=1
+    #     if i%5000 ==0:
+    #         print("saving!!!")
+    #         np.save("long_trajectory_direct_debug2.npy",x.numpy())
+    #         np.savez("long_trajectory_direct_debug2.npz",lr=np.array(opt.learning_rate.initial_learning_rate),iters = np.array(i))
+    #     i+=1
             
     
 
-    # check if the hit point that is getting optimized is the right place
+    # # check if the hit point that is getting optimized is the right place
+
+    np.save("long_trajectory_direct_debug_scipy2.npy",x.numpy())
+    plt.plot(resdd.x)
     print("finished")
+    reward_computer.get_cost(tf.constant(resdd.x,dtype=tf.float32))
