@@ -6,8 +6,7 @@ import scipy
 from math import pi
 from time import time
 import matplotlib.pyplot as plt
-from numpy import linalg as la
-import tensorflow_probability as tfp
+import scipy.optimize as sopt
 
 
 
@@ -59,9 +58,9 @@ class Reward:
     def get_cost(self, trajectory,discount=1):
         velocities ,acceleration,jerk = self.get_deriv_penalties(trajectory)
 
-        velocities = tf.abs(velocities)
-        acceleration = tf.abs(acceleration)
-        jerk = tf.abs(jerk)
+        velocities = tf.square(velocities)
+        acceleration = tf.square(acceleration)
+        jerk = tf.square(jerk)
 
         strike_rewards = tf.TensorArray(dtype=tf.float32,size=len(self.strike_promps))
         #traj =self.get_intervals(trajectory,[.75,1.85])
@@ -88,6 +87,7 @@ class Reward:
         max_val = tf.reduce_max(log_pi)
         softmax =(max_val + tf.math.log(tf.reduce_sum(tf.exp(log_pi - max_val))))
         return softmax
+
     def get_deriv_penalties(self,trajectory):
         velocities = tf.TensorArray(dtype=tf.float32,size=4)
         acceleration=tf.TensorArray(dtype=tf.float32,size=4)
@@ -101,10 +101,6 @@ class Reward:
             jerk=jerk.write(i,self.my_gradient_tf(a))
         return velocities.concat() , acceleration.concat(), jerk.concat()
             
-
-            
-
-
 
     def component_log_density(self, interval, strike_index, samples: tf.Tensor) -> tf.Tensor:
         diffs = samples - tf.squeeze(self.strike_promp_means[interval][strike_index])
@@ -219,26 +215,37 @@ if __name__ == "__main__":
                 return
             else:
                 return True
+        
+    def grad(x):
+        with tf.GradientTape() as tape:
+            cost = reward_computer.get_cost(x)
+            print(cost)
+            grads = tape.gradient(cost,x)
+            
+        return cost ,grads
+
+    def func(x):
+        return [vv.numpy().astype(np.float64)  for vv in grad(tf.Variable(x, dtype=tf.float32))]
 
 
 
 
     #strike_promps = build_strike_promps([[600]])
-    #strike_promps = build_strike_promps([[600,600,600],[450, 450, 450]])
-    strike_promps = build_strike_promps([[600],[450]])
+    strike_promps = build_strike_promps([[600,600,600],[450, 450, 450]])
+    #strike_promps = build_strike_promps([[600],[450]])
     long_promp = build_long_promp(45,1800)
     #long_promp = build_long_promp(45,600)
 
-    ws = [["/home/atashak/taxi/robot/weights_new15/weights3.npz",],
-            ["/home/atashak/taxi/robot/weights_new15/weights5.npz",]
-            ]
-    # ws = [["/home/atashak/taxi/robot/weights_new15/weights1.npz",
-    #         "/home/atashak/taxi/robot/weights_new15/weights2.npz",
-    #         "/home/atashak/taxi/robot/weights_new15/weights3.npz"],
-    #         ["/home/atashak/taxi/robot/weights_new15/weights4.npz",
-    #         "/home/atashak/taxi/robot/weights_new15/weights5.npz",
-    #         "/home/atashak/taxi/robot/weights_new15/weights6.npz"]
+    # ws = [["/home/atashak/taxi/robot/weights_new15/weights3.npz",],
+    #         ["/home/atashak/taxi/robot/weights_new15/weights5.npz",]
     #         ]
+    ws = [["/home/atashak/taxi/robot/weights_new15/weights1.npz",
+            "/home/atashak/taxi/robot/weights_new15/weights2.npz",
+            "/home/atashak/taxi/robot/weights_new15/weights3.npz"],
+            ["/home/atashak/taxi/robot/weights_new15/weights4.npz",
+            "/home/atashak/taxi/robot/weights_new15/weights5.npz",
+            "/home/atashak/taxi/robot/weights_new15/weights6.npz"]
+            ]
     # ws = [["/home/atashak/taxi/robot/weights_new15/weights1.npz",],
     # ["/home/atashak/taxi/robot/weights_new15/weights4.npz",] ]
            
@@ -246,14 +253,18 @@ if __name__ == "__main__":
     
     reward_computer = Reward(strike_promps, strike_promp_means, strike_promp_chols, long_promp,0.6)
     #reward_computer.set_hit_times(t_hits=[.3], drum_indices=[0])#
-    reward_computer.set_hit_times(t_hits=[.55,1.45], drum_indices=[0, 1])
-    reward_computer.get_time_indexes(t_hits=[.55,1.45])
+    errs = np.array([0.031440544128418055,0.04373688697814933])
+    t_hits=np.array([.55,1.45])
+    t_hits += errs
+    reward_computer.set_hit_times(t_hits=t_hits, drum_indices=[0, 1])
+    reward_computer.get_time_indexes(t_hits=t_hits)
     # reward_computer.get_time_indexes(t_hits=[.3])
 
     #x= tf.Variable(initial_value= np.random.rand(180),dtype=tf.float32)
     #x= tf.Variable(initial_value= np.random.rand(2400),dtype=tf.float32)
 
     pre_trained = False
+    pre_optimize = True
     # lr_schedle = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=.1,decay_steps=5000,decay_rate=0.5)
     # new_lr_schedle = tf.keras.optimizers.schedules.PiecewiseConstantDecay(boundaries=[2000,5000,8500,11000,25000],values=[0.1,0.05,0.01,0.005,0.002,0.001])
     if pre_trained:
@@ -262,6 +273,13 @@ if __name__ == "__main__":
         lr = float(lr_iter["lr"])
         i = int(lr_iter["iters"])
         opt = tf.keras.optimizers.Adam(learning_rate=MyLRSchedule(lr))
+    elif pre_optimize:
+        x= tf.Variable(initial_value= np.random.rand(7200),dtype=tf.float32)
+        opt = tf.keras.optimizers.Adam(learning_rate=MyLRSchedule(0.01))
+        i=1
+        resdd= sopt.minimize(fun=func, x0=x,
+                                      jac=True, method='L-BFGS-B')
+        x = tf.Variable(resdd.x.astype(np.float32),dtype=np.float32)
     else:
         x= tf.Variable(initial_value= np.random.rand(7200),dtype=tf.float32)
         opt = tf.keras.optimizers.Adam(learning_rate=MyLRSchedule(0.1))
@@ -293,8 +311,8 @@ if __name__ == "__main__":
         
         if i%5000 ==0:
             print("saving!!!")
-            np.save("long_trajectory_direct_debug.npy",x.numpy())
-            np.savez("long_trajectory_direct_debug.npz",lr=np.array(opt.learning_rate.initial_learning_rate),iters = np.array(i))
+            np.save("long_trajectory_direct_pre_trained.npy",x.numpy())
+            np.savez("long_trajectory_direct_pre_trained.npz",lr=np.array(opt.learning_rate.initial_learning_rate),iters = np.array(i))
         i+=1
             
     
