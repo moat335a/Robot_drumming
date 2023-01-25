@@ -39,20 +39,6 @@ class ProMP:
             t+=1
         return phis.stack()
 
-   
-    # #@tf.function(input_signature=(tf.TensorSpec(shape=[None], dtype=tf.float32)))
-    # def get_trajectory(self,weights):
-    #     """calculates y for 4 dofs
-    #     weights : weights of proMP with shape (n_dofs,12)
-    #     """
-    #     joint_trajectories = tf.TensorArray(tf.float64,size=self.n_discretizations)
-    #     t= tf.Variable(initial_value=0)
-    #     for i,phase in enumerate( tf.range(0,1,1/self.n_discretizations)):
-    #         joint_trajectory = tf.matmul(tf.reshape( self.get_phi(phase),[1,-1]), weights)
-    #         joint_trajectories = joint_trajectories.write(i,tf.reshape(joint_trajectory,[-1]).numpy())
-    #         t.assign(t+1)
-        
-    #     return joint_trajectories.stack()
 
     def fit_ridge_regression(self,y,k=1e-12,**kwargs):
         weights = np.zeros((y.shape[0],self.Cs.shape[0]*4))
