@@ -10,8 +10,6 @@ import scipy.optimize as sopt
 
 
 
-
-
 class Reward:
     def __init__(self, strike_promps, strike_promp_means,strike_promp_chols,  long_promp,promp_duration=0.6) -> None:
         self.strike_promps = strike_promps # should be a list of list of Promps (one list per drum)
@@ -23,6 +21,8 @@ class Reward:
 
  
     def get_time_indexes(self,t_hits):
+        """gets the corresponding time indexes from trajectory
+        t_hits: desired hit times"""
         self.times_steps = []
         total =(self.long_promp.n_discretizations*.004 - 0.001)
         for t,t_hit in enumerate(t_hits):
@@ -37,6 +37,7 @@ class Reward:
 
 
     def set_hit_times(self, t_hits, drum_indices):
+        """t_hits: desired hit times"""
         total =self.long_promp.n_discretizations*.004
         assert(len(drum_indices) == len(t_hits)) # for each hit_time we specify the index of the drum
         self.Phi_per_segment = []
@@ -56,6 +57,8 @@ class Reward:
 
     tf.function(input_signature=(tf.TensorSpec(shape=[None], dtype=tf.float32),))
     def get_cost(self, trajectory,discount=1):
+        """tf function to use in tf graph
+        trajectory: the trajectory to be optimized"""
         velocities ,acceleration,jerk = self.get_deriv_penalties(trajectory)
 
         velocities = tf.square(velocities)
@@ -73,6 +76,8 @@ class Reward:
         return - tf.reduce_sum(strike_rewards.stack()) + (tf.reduce_sum(velocities)+tf.reduce_sum(acceleration)+tf.reduce_sum(jerk))/discount
 
     def get_strike_reward(self, interval_idx, trajectory):
+        """gets the reward for the part of trajectory corresponding the 
+        interval_idx drum table"""
         log_pi = tf.TensorArray(size = len(self.Phi_per_segment[interval_idx]), dtype=tf.float32)
         for i in range(len(self.Phi_per_segment[interval_idx])): # we call this two times each loop runs 3 times
 
@@ -89,6 +94,7 @@ class Reward:
         return softmax
 
     def get_deriv_penalties(self,trajectory):
+        """get the trajectories velocity, acceleration, jerk penalties"""
         velocities = tf.TensorArray(dtype=tf.float32,size=4)
         acceleration=tf.TensorArray(dtype=tf.float32,size=4)
         jerk=tf.TensorArray(dtype=tf.float32,size=4)
@@ -103,6 +109,8 @@ class Reward:
             
 
     def component_log_density(self, interval, strike_index, samples: tf.Tensor) -> tf.Tensor:
+        """compute the log density under the corresponding ProMPs
+        strike_index: index of the drum table"""
         diffs = samples - tf.squeeze(self.strike_promp_means[interval][strike_index])
         diffs = tf.expand_dims(diffs,0)
        
@@ -115,6 +123,8 @@ class Reward:
 
     @staticmethod
     def my_gradient_tf(a):
+        """tf function to compute the gradients of a trajectory over the last dimention
+        a: trajectory"""
         rght = tf.concat((a[..., 1:], tf.expand_dims(a[..., -1], -1)), -1)
         left = tf.concat((tf.expand_dims(a[...,0], -1), a[..., :-1]), -1)
         ones = tf.ones_like(rght[..., 2:], tf.float32)
@@ -124,6 +134,8 @@ class Reward:
 
 
     def plot_trajectory(self,long_trajectory):
+        """plots the trajectory and the corresponding ProMPs for different sections of the trajectory """
+
         plt.ion()
         total =int((self.long_promp.n_discretizations*.004)*1000)
         plt.plot(np.array([j for j in range(total)]),long_trajectory.numpy())
@@ -165,6 +177,8 @@ if __name__ == "__main__":
         return strike_promps
 
     def load_means_and_choleskys(strike_promps, ws):   
+        """computes the means, covariances of the normal distribution over the trajectories 
+        and convert the covariance matrix to choleskys matrix """
         strike_promp_means = []
         strike_promp_covs = []
         strike_covs = []
@@ -189,6 +203,8 @@ if __name__ == "__main__":
         return strike_promp_means, strike_promp_covs ,strike_covs
     
     class MyLRSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+        """decreas the learing rate if the first item in the 
+        list passed as last element is the biggest, until the minimum learning rate has been reached"""
         def __init__(self, initial_learning_rate,ceiling = 0.0001):
             self.initial_learning_rate = initial_learning_rate
             self.ceiling = ceiling
@@ -225,6 +241,7 @@ if __name__ == "__main__":
         return cost ,grads
 
     def func(x):
+
         return [vv.numpy().astype(np.float64)  for vv in grad(tf.Variable(x, dtype=tf.float32))]
 
 
